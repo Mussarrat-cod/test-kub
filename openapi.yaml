@@ -1,0 +1,111 @@
+openapi: 3.0.3
+
+# ---------------------------------------------------------------------------
+# THE CONTRACT. This single file describes the whole API.
+# The generator reads it and writes the FastAPI code for you.
+# Change the YAML -> re-run generate.sh -> routes + models update.
+# ---------------------------------------------------------------------------
+
+info:
+  title: Log Analyzer Service
+  description: Upload a log file, find which services are failing.
+  version: 1.0.0
+
+servers:
+  - url: http://127.0.0.1:8000
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      operationId: health
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /analyze:
+    post:
+      tags: [Analyze]
+      summary: Analyze a log file
+      description: Upload a log file (multipart/form-data) and get ERROR counts per service.
+      operationId: analyze
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: A .log / .txt file
+      responses:
+        "200":
+          description: Analysis result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResult"
+        "400":
+          description: File is not valid UTF-8 text
+        "422":
+          description: Missing or invalid file field
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+
+    AnalysisResult:
+      type: object
+      additionalProperties: false
+      required: [lines_processed, lines_skipped, errors_by_service, top_offender]
+      properties:
+        lines_processed:
+          type: integer
+          example: 5
+        lines_skipped:
+          type: integer
+          example: 0
+        errors_by_service:
+
+          type: object
+          additionalProperties:
+            type: integer
+          example:
+            payment-service: 2
+            billing-service: 1
+            auth-service: 0
+        top_offender:
+          type: string
+          nullable: true
+          example: payment-service
+
+
+# This whole line is a comment
+# AnalysisResult:
+#   type: object          # a comment after a value
+#   required: [lines_processed, lines_skipped, errors_by_service]
+#   properties:
+#     lines_processed:
+#       type: integer     # whole numbers only
+#     # top_offender is optional because it's null when there are no errors
+#     top_offender:
+#       type: string
+#       nullable: true
+
+
+#

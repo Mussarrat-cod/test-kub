@@ -1,0 +1,12 @@
+2026-09-18 10:23:45 ERROR payment-service Connection timeout
+2026-09-18 10:23:46 INFO auth-service User logged in
+2026-09-18 10:23:47 ERROR payment-service Connection refused after 3 retries
+2026-09-18 10:24:01 WARN auth-service Slow response
+2026-09-18 10:24:15 ERROR billing-service Invalid account state
+
+2026-09-18 10:24:20 error billing-service lowercase level should still count
+2026-09-18 10:24:25 @@@ ghost-service bogus level field
+Traceback most recent call last
+2026-09-18 10:24:30 ERROR notification-service
+
+2026-09-18 10:24:35 INFO search-service Query ok
