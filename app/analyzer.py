@@ -1,67 +1,141 @@
-"""Part 1 - The analyzer.
 
-Pure Python, no web code. Takes log lines, returns ERROR counts per service.
-Keeping this separate from the server means you can unit-test it on its own.
-
-Line format:  DATE TIME LEVEL service-name message...
-Example:      2026-09-18 10:23:45 ERROR payment-service Connection timeout
-"""
-
+import re
+from datetime import datetime
 from collections import Counter
 from typing import Iterable
 
 
-def parse_line(line: str):
-    """Split one log line into its parts.
+PRIMARY_SERVICES = [
+    "payment-service",
+    "order-service",
+]
 
-    maxsplit=4 gives exactly 5 pieces: date, time, level, service, message.
-    The message may contain spaces, so we stop splitting after 4 cuts.
-    Returns None for blank/malformed lines instead of crashing.
-    """
-    parts = line.strip().split(maxsplit=4)
-    if len(parts) < 4:  # message is optional, the first 4 fields are required
+SECONDARY_SERVICES = [
+    "billing-service",
+    "inventory-service",
+]
+
+VALID_LEVELS = {
+    "ERROR", "INFO", "WARN", "WARNING",
+    "DEBUG", "CRITICAL", "FATAL",
+}
+
+if len(PRIMARY_SERVICES) != len(set(PRIMARY_SERVICES)):
+    raise ValueError("Duplicate service in PRIMARY_SERVICES")
+
+if len(SECONDARY_SERVICES) != len(set(SECONDARY_SERVICES)):
+    raise ValueError("Duplicate service in SECONDARY_SERVICES")
+
+if set(PRIMARY_SERVICES) & set(SECONDARY_SERVICES):
+    raise ValueError("Primary and secondary services must not overlap")
+
+
+LOG_PATTERN = re.compile(
+    r"^\s*(\d{4}-\d{2}-\d{2})\s+"
+    r"(\d{2}:\d{2}:\d{2})\s+"
+    r"(\S+)\s+"
+    r"(\S+)"
+    r"(?:\s+(.*))?\s*$"
+)
+
+
+def parse_line(line: str):
+    """Parse a log line, allowing levels such as ERROR and **ERROR**."""
+
+    match = LOG_PATTERN.fullmatch(line)
+
+    if not match:
         return None
-    date, time, level, service = parts[:4]
-    message = parts[4] if len(parts) == 5 else ""
-    return date, time, level, service, message
+
+    date, time, raw_level, service, message = match.groups()
+
+    # Validate that the date and time are real values.
+    try:
+        datetime.strptime(
+            f"{date} {time}", "%Y-%m-%d %H:%M:%S"
+        )
+    except ValueError:
+        return None
+
+    # Normalize **ERROR**, error, and ERROR to ERROR.
+    level = raw_level.strip("*").upper()
+
+    if level not in VALID_LEVELS:
+        return None
+
+    return date, time, level, service, message or ""
 
 
 def analyze_lines(lines: Iterable[str]) -> dict:
-    """Count ERROR lines per service.
+    """Count ERROR entries and group services into categories."""
 
-    Every service seen in the file is included (even with 0 errors),
-    which is why auth-service shows 0 in the example output.
-    """
-    error_counts: Counter = Counter()
-    seen_services: set = set()
+    error_counts = Counter()
+    seen_services = set()
     lines_processed = 0
     skipped = 0
 
     for line in lines:
-        if not line.strip():  # ignore blank lines completely
+        if not line.strip():
             continue
+
         parsed = parse_line(line)
+
         if parsed is None:
             skipped += 1
             continue
 
         _, _, level, service, _ = parsed
+
         lines_processed += 1
         seen_services.add(service)
-        if level.upper() == "ERROR":
+
+        if level == "ERROR":
             error_counts[service] += 1
 
-    # Build the result: errors per service, highest first.
-    # Sorting by (-count, name) makes ties deterministic (alphabetical).
-    ordered = sorted(seen_services, key=lambda s: (-error_counts[s], s))
-    errors_by_service = {s: error_counts[s] for s in ordered}
+    primary = {
+        service: error_counts[service]
+        for service in sorted(PRIMARY_SERVICES)
+    }
 
-    # Top offender = service with the most errors. None if there were no errors.
-    top_offender = ordered[0] if ordered and error_counts[ordered[0]] > 0 else None
+    secondary = {
+        service: error_counts[service]
+        for service in sorted(SECONDARY_SERVICES)
+    }
+
+    known_services = set(PRIMARY_SERVICES) | set(SECONDARY_SERVICES)
+
+    other_services = {
+        service: error_counts[service]
+        for service in sorted(seen_services - known_services)
+    }
+
+    # Highest count wins; alphabetical order breaks ties.
+    offenders = [
+        service
+        for service, count in error_counts.items()
+        if count > 0
+    ]
+
+    top_offender = (
+        min(
+            offenders,
+            key=lambda service: (
+                -error_counts[service],
+                service.casefold(),
+                service,
+            ),
+        )
+        if offenders
+        else None
+    )
 
     return {
         "lines_processed": lines_processed,
         "lines_skipped": skipped,
-        "errors_by_service": errors_by_service,
+        "errors_by_service": {
+            "primary": primary,
+            "secondary": secondary,
+            "other_services": other_services,
+        },
         "top_offender": top_offender,
     }

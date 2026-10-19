@@ -81,14 +81,33 @@ components:
           type: integer
           example: 0
         errors_by_service:
-
           type: object
-          additionalProperties:
-            type: integer
-          example:
-            payment-service: 2
-            billing-service: 1
-            auth-service: 0
+          additionalProperties: false
+          required: [primary, secondary, other_services]
+          properties:
+            primary:
+              type: object
+              additionalProperties:
+                type: integer
+                minimum: 0
+              example:
+                payment-service: 2
+                order-service: 0
+            secondary:
+              type: object
+              additionalProperties:
+                type: integer
+                minimum: 0
+              example:
+                billing-service: 1
+                inventory-service: 0
+            other_services:
+              type: object
+              additionalProperties:
+                type: integer
+                minimum: 0
+              example:
+                auth-service: 3
         top_offender:
           type: string
           nullable: true

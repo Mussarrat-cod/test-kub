@@ -1,0 +1,20 @@
+2026-10-19 09:00:01 INFO payment-service Payment service started
+2026-10-19 09:00:03 ERROR payment-service Connection timeout
+2026-10-19 09:00:05 INFO order-service Order service started
+2026-10-19 09:00:07 WARN auth-service Slow authentication response
+2026-10-19 09:00:10 ERROR billing-service Invalid account state
+2026-10-19 09:00:12 INFO inventory-service Inventory sync completed
+2026-10-19 09:00:15 ERROR payment-service Connection refused
+2026-10-19 09:00:18 INFO auth-service User login successful
+2026-10-19 09:00:21 ERROR notification-service Email delivery failed
+2026-10-19 09:00:24 DEBUG order-service Checking order status
+2026-10-19 09:00:27 ERROR billing-service Payment record missing
+2026-10-19 09:00:30 INFO search-service Search index loaded
+2026-10-19 09:00:33 error payment-service Lowercase error level should count
+2026-10-19 09:00:36 WARN inventory-service Inventory update took longer than expected
+2026-10-19 09:00:39 ERROR auth-service Invalid session token
+2026-10-19 09:00:42 INFO notification-service Notification worker ready
+2026-10-19 09:00:45 ERROR search-service Search backend unavailable
+2026-10-19 09:00:48 INFO billing-service Billing service healthy
+2026-10-19 09:00:51 ERROR order-service Order processing failed
+2026-10-19 09:00:54 INFO payment-service Payment service recovered

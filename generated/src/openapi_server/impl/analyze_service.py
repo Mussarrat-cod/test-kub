@@ -1,48 +1,31 @@
+import os
+import sys
+from pathlib import Path
+
+# Resolve app/analyzer.py.
+# Structure: genyal/generated/src/openapi_server/impl/analyze_service.py
+#   parents[0] = impl
+#   parents[1] = openapi_server
+#   parents[2] = src
+#   parents[3] = generated
+#   parents[4] = genyal   <-- app/ lives here
+# An ANALYZER_DIR env var overrides this for Docker or custom setups.
+_ANALYZER_DIR_ENV = os.environ.get("ANALYZER_DIR", "")
+if _ANALYZER_DIR_ENV:
+    _APP_DIR = Path(_ANALYZER_DIR_ENV)
+else:
+    _APP_DIR = Path(__file__).resolve().parents[4] / "app"
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
 
 from fastapi import HTTPException, UploadFile
 from openapi_server.apis.analyze_api_base import BaseAnalyzeApi
 from openapi_server.models.analysis_result import AnalysisResult
 
-
-def analyze_lines(lines):
-    errors_by_service = {}
-    lines_processed = 0
-    lines_skipped = 0
-
-    for line in lines:
-        if not line.strip():
-            continue
-
-        parts = line.strip().split(maxsplit=4)
-
-        if len(parts) < 4:
-            lines_skipped += 1
-            continue
-
-        _, _, level, service = parts[:4]
-        lines_processed += 1
-
-        if service not in errors_by_service:
-            errors_by_service[service] = 0
-
-        if level.upper() == "ERROR":
-            errors_by_service[service] += 1
-
-    errors_by_service = dict(
-        sorted(errors_by_service.items(), key=lambda item: (-item[1], item[0]))
-    )
-
-    top_offender = next(
-        (service for service, count in errors_by_service.items() if count > 0),
-        None,
-    )
-
-    return {
-        "lines_processed": lines_processed,
-        "lines_skipped": lines_skipped,
-        "errors_by_service": errors_by_service,
-        "top_offender": top_offender,
-    }
+# Import the shared analyzer (app/analyzer.py).
+# PRIMARY_SERVICES and SECONDARY_SERVICES are defined there.
+# pyrefly: ignore [missing-import]
+from analyzer import analyze_lines  # noqa: E402
 
 
 class AnalyzeService(BaseAnalyzeApi):

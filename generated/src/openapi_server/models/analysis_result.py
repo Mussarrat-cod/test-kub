@@ -18,24 +18,59 @@ import re  # noqa: F401
 import json
 
 
-
-
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import BaseModel, Field, StrictInt, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 try:
     from typing import Self
 except ImportError:
     from typing_extensions import Self
 
+
+class ErrorsByService(BaseModel):
+    """Categorized error counts split into primary, secondary, and other services."""
+
+    primary: Dict[str, StrictInt] = Field(
+        description="Error counts for primary services (always present, zero when absent from log)",
+        json_schema_extra={"examples": [{"payment-service": 2, "order-service": 0}]},
+    )
+    secondary: Dict[str, StrictInt] = Field(
+        description="Error counts for secondary services (always present, zero when absent from log)",
+        json_schema_extra={"examples": [{"billing-service": 1, "inventory-service": 0}]},
+    )
+    other_services: Dict[str, StrictInt] = Field(
+        description="Error counts for services not in primary or secondary lists",
+        json_schema_extra={"examples": [{"auth-service": 3}]},
+    )
+
+    model_config = {
+        "populate_by_name": True,
+        "validate_assignment": True,
+        "protected_namespaces": (),
+        # Reject any key other than primary, secondary, other_services
+        "extra": "forbid",
+    }
+
+
 class AnalysisResult(BaseModel):
     """
     AnalysisResult
-    """ # noqa: E501
+    """  # noqa: E501
     lines_processed: StrictInt = Field(json_schema_extra={"examples": [5]})
     lines_skipped: StrictInt = Field(json_schema_extra={"examples": [0]})
-    errors_by_service: Dict[str, StrictInt] = Field(json_schema_extra={"examples": [{"payment-service": 2, "billing-service": 1, "auth-service": 0}]})
-    top_offender: Optional[StrictStr] = Field(..., json_schema_extra={"examples": ["payment-service"]})
-    __properties: ClassVar[List[str]] = ["lines_processed", "lines_skipped", "errors_by_service", "top_offender"]
+    errors_by_service: ErrorsByService = Field(
+        json_schema_extra={"examples": [{
+            "primary": {"payment-service": 2, "order-service": 0},
+            "secondary": {"billing-service": 1, "inventory-service": 0},
+            "other_services": {"auth-service": 3},
+        }]}
+    )
+    top_offender: Optional[StrictStr] = Field(
+        ...,
+        json_schema_extra={"examples": ["payment-service"]},
+    )
+    __properties: ClassVar[List[str]] = [
+        "lines_processed", "lines_skipped", "errors_by_service", "top_offender"
+    ]
 
     model_config = {
         "populate_by_name": True,
@@ -44,14 +79,12 @@ class AnalysisResult(BaseModel):
         "extra": "forbid",
     }
 
-
     def to_str(self) -> str:
         """Returns the string representation of the model using alias"""
         return pprint.pformat(self.model_dump(by_alias=True))
 
     def to_json(self) -> str:
         """Returns the JSON representation of the model using alias"""
-        # TODO: pydantic v2: use .model_dump_json(by_alias=True, exclude_unset=True) instead
         return json.dumps(self.to_dict())
 
     @classmethod
@@ -60,26 +93,11 @@ class AnalysisResult(BaseModel):
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
-        """Return the dictionary representation of the model using alias.
-
-        This has the following differences from calling pydantic's
-        `self.model_dump(by_alias=True)`:
-
-        * `None` is only added to the output dict for nullable fields that
-          were set at model initialization. Other fields with value `None`
-          are ignored.
-        """
-        _dict = self.model_dump(
-            by_alias=True,
-            exclude={
-            },
-            exclude_none=True,
-        )
-        # set to None if top_offender (nullable) is None
-        # and model_fields_set contains the field
+        """Return the dictionary representation of the model using alias."""
+        _dict = self.model_dump(by_alias=True, exclude={}, exclude_none=True)
+        # Always include top_offender even when None (nullable field)
         if self.top_offender is None and "top_offender" in self.model_fields_set:
-            _dict['top_offender'] = None
-
+            _dict["top_offender"] = None
         return _dict
 
     @classmethod
@@ -87,11 +105,6 @@ class AnalysisResult(BaseModel):
         """Create an instance of AnalysisResult from a dict"""
         if obj is None:
             return None
-
         if not isinstance(obj, dict):
             return cls.model_validate(obj)
-
-        _obj = cls.model_validate(obj)
-        return _obj
-
-
+        return cls.model_validate(obj)

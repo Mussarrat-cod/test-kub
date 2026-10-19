@@ -47,6 +47,7 @@ paths:
 components:
   schemas:
     HealthResponse:
+      additionalProperties: false
       example:
         status: ok
       properties:
@@ -59,6 +60,7 @@ components:
       title: HealthResponse
       type: object
     AnalysisResult:
+      additionalProperties: false
       example:
         lines_processed: 5
         lines_skipped: 0
@@ -77,13 +79,32 @@ components:
           title: lines_skipped
           type: integer
         errors_by_service:
-          additionalProperties:
-            type: integer
-          example:
-            payment-service: 2
-            billing-service: 1
-            auth-service: 0
-          title: errors_by_service
+          additionalProperties: false
+          required: [primary, secondary, other_services]
+          properties:
+            primary:
+              type: object
+              additionalProperties:
+                type: integer
+                minimum: 0
+              example:
+                payment-service: 2
+                order-service: 0
+            secondary:
+              type: object
+              additionalProperties:
+                type: integer
+                minimum: 0
+              example:
+                billing-service: 1
+                inventory-service: 0
+            other_services:
+              type: object
+              additionalProperties:
+                type: integer
+                minimum: 0
+              example:
+                auth-service: 3
           type: object
         top_offender:
           example: payment-service
@@ -94,6 +115,7 @@ components:
       - errors_by_service
       - lines_processed
       - lines_skipped
+      - top_offender
       title: AnalysisResult
       type: object
     analyze_request:

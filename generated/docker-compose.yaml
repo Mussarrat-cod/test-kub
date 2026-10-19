@@ -2,7 +2,9 @@
 services:
   service:
     build:
-      context: .
+      # Context is genyal/ so the Dockerfile can access both generated/ and app/
+      context: ..
+      dockerfile: generated/Dockerfile
       target: service
     ports:
       - "8080:8080"
