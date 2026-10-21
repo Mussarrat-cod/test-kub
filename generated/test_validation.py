@@ -21,7 +21,10 @@ def test_strict_validation():
     valid_data = {
         "lines_processed": 5,
         "lines_skipped": 0,
-        "errors_by_service": {"payment-service": 2, "billing-service": 1},
+        "errors_by_service": {
+            "primary": {"order-service": 0, "payment-service": 2},
+            "secondary": {"billing-service": 1},
+        },
         "top_offender": "payment-service",
     }
     result = AnalysisResult.model_validate(valid_data)
@@ -51,7 +54,10 @@ def test_strict_validation():
     data_with_missing = {
         "lines_processed": 5,
         "lines_skipped": 0,
-        "errors_by_service": {"payment-service": 2},
+        "errors_by_service": {
+            "primary": {"order-service": 0, "payment-service": 2},
+            "secondary": {"billing-service": 1},
+        },
         # 'top_offender' omitted
     }
     try:
@@ -73,6 +79,25 @@ def test_strict_validation():
         print("  [PASS] Extra variable in HealthResponse was blocked:")
         for err in e.errors():
             print(f"         Field: '{err['loc'][0]}' -> {err['msg']} (type: {err['type']})")
+
+    # -------------------------------------------------------------
+    # 5. SKIPPED DETAILS VALIDATION TEST
+    # -------------------------------------------------------------
+    print("\n[TEST 5] Testing payload with lines_skipped > 0 and skipped_details...")
+    data_with_skipped = {
+        **valid_data,
+        "lines_skipped": 1,
+        "skipped_details": [
+            {
+                "line": 3,
+                "content": "bad log line",
+                "error": "Missing or invalid date field"
+            }
+        ]
+    }
+    result_skipped = AnalysisResult.model_validate(data_with_skipped)
+    print("  [PASS] Payload with skipped_details successfully validated:")
+    print("         ", result_skipped.to_dict())
 
     print("\n" + "=" * 60)
     print("ALL TESTS COMPLETED!")

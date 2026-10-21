@@ -80,7 +80,7 @@ components:
           type: integer
         errors_by_service:
           additionalProperties: false
-          required: [primary, secondary, other_services]
+          required: [primary, secondary]
           properties:
             primary:
               type: object
@@ -88,29 +88,39 @@ components:
                 type: integer
                 minimum: 0
               example:
-                payment-service: 2
                 order-service: 0
+                payment-service: 2
             secondary:
               type: object
               additionalProperties:
                 type: integer
                 minimum: 0
               example:
-                billing-service: 1
-                inventory-service: 0
-            other_services:
-              type: object
-              additionalProperties:
-                type: integer
-                minimum: 0
-              example:
-                auth-service: 3
+                auth-service: 1
+                billing-service: 3
+                notification-service: 0
           type: object
         top_offender:
           example: payment-service
           nullable: true
           title: top_offender
           type: string
+        skipped_details:
+          type: array
+          description: Diagnostics for each skipped line (missing fields, extra fields, invalid tokens)
+          items:
+            type: object
+            required: [line, content, error]
+            properties:
+              line:
+                type: integer
+                example: 3
+              content:
+                type: string
+                example: "bad log line"
+              error:
+                type: string
+                example: "Missing or invalid date field"
       required:
       - errors_by_service
       - lines_processed

@@ -18,7 +18,7 @@ import re  # noqa: F401
 import json
 
 
-from pydantic import BaseModel, Field, StrictInt, StrictStr
+from pydantic import BaseModel, Field, StrictInt, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 try:
     from typing import Self
@@ -27,26 +27,36 @@ except ImportError:
 
 
 class ErrorsByService(BaseModel):
-    """Categorized error counts split into primary, secondary, and other services."""
+    """Categorized error counts split into primary and secondary services."""
 
     primary: Dict[str, StrictInt] = Field(
         description="Error counts for primary services (always present, zero when absent from log)",
-        json_schema_extra={"examples": [{"payment-service": 2, "order-service": 0}]},
+        json_schema_extra={"examples": [{"order-service": 0, "payment-service": 2}]},
     )
     secondary: Dict[str, StrictInt] = Field(
-        description="Error counts for secondary services (always present, zero when absent from log)",
-        json_schema_extra={"examples": [{"billing-service": 1, "inventory-service": 0}]},
-    )
-    other_services: Dict[str, StrictInt] = Field(
-        description="Error counts for services not in primary or secondary lists",
-        json_schema_extra={"examples": [{"auth-service": 3}]},
+        description="Error counts for secondary services (all other services detected in the log)",
+        json_schema_extra={"examples": [{"auth-service": 1, "billing-service": 3, "notification-service": 0}]},
     )
 
     model_config = {
         "populate_by_name": True,
         "validate_assignment": True,
         "protected_namespaces": (),
-        # Reject any key other than primary, secondary, other_services
+        # Reject any key other than primary, secondary
+        "extra": "forbid",
+    }
+
+
+class SkippedLineDetail(BaseModel):
+    """Detailed error information for a single skipped log line."""
+    line: StrictInt = Field(description="Line number in the log file (1-indexed)")
+    content: StrictStr = Field(description="The offending log line content")
+    error: StrictStr = Field(description="Diagnostic reason explaining missing fields, extra fields, or invalid values")
+
+    model_config = {
+        "populate_by_name": True,
+        "validate_assignment": True,
+        "protected_namespaces": (),
         "extra": "forbid",
     }
 
@@ -59,17 +69,22 @@ class AnalysisResult(BaseModel):
     lines_skipped: StrictInt = Field(json_schema_extra={"examples": [0]})
     errors_by_service: ErrorsByService = Field(
         json_schema_extra={"examples": [{
-            "primary": {"payment-service": 2, "order-service": 0},
-            "secondary": {"billing-service": 1, "inventory-service": 0},
-            "other_services": {"auth-service": 3},
+            "primary": {"order-service": 0, "payment-service": 2},
+            "secondary": {"auth-service": 1, "billing-service": 3, "notification-service": 0},
         }]}
     )
     top_offender: Optional[StrictStr] = Field(
         ...,
         json_schema_extra={"examples": ["payment-service"]},
     )
+    skipped_details: Optional[List[SkippedLineDetail]] = Field(
+        default=None,
+        description="Detailed diagnostic list for each skipped line (missing fields, extra fields, invalid levels/dates)",
+        json_schema_extra={"examples": [[{"line": 3, "content": "malformed line", "error": "Missing timestamp"}]]}
+    )
+
     __properties: ClassVar[List[str]] = [
-        "lines_processed", "lines_skipped", "errors_by_service", "top_offender"
+        "lines_processed", "lines_skipped", "errors_by_service", "top_offender", "skipped_details"
     ]
 
     model_config = {

@@ -1,0 +1,8 @@
+2026-09-18 10:00:00 INFO order-service User placed order #1001
+2026-09-18 10:00:01 ERROR payment-service Payment gateway timeout
+This line has no timestamp or format and will be skipped
+2026-09-18 10:00:02 UNKNOWN_LEVEL auth-service Token validation failed
+2026-09-18 25:99:99 INFO billing-service Invalid time 25:99:99 will be skipped
+2026-09-18 10:00:05 ERROR payment-service Insufficient funds
+2026-02-31 10:00:06 ERROR order-service Feb 31 does not exist so skipped
+2026-09-18 10:00:07 INFO notification-service Email sent successfully

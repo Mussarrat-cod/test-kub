@@ -1,20 +1,22 @@
 # coding: utf-8
 """
-Comprehensive tests for the categorized log analyzer.
+Comprehensive tests for the simplified 2-category log analyzer.
 
 Covers:
-- Valid lines parsed correctly
+- Valid lines parsed correctly (regex full match, datetime, message)
 - Malformed and blank lines (skipped / ignored correctly)
 - Optional message field
-- Category assignment: primary, secondary, other_services
-- Zero counts for configured services absent from the log
-- Alphabetical tie-breaking for top_offender
-- Empty log, error-free log
-- Multiple ERRORs for the same service
-- Non-ERROR levels not counted
-- No service appears in multiple categories
-- PRIMARY/SECONDARY overlap detection
-- HTTP endpoint: valid upload, wrong field, bad UTF-8
+- Category assignment: primary (predefined) and secondary (all other detected services)
+- Configured primary services included even when absent from log (count = 0)
+- Unconfigured services automatically appear under secondary
+- Secondary services with only non-ERROR entries appear with count = 0
+- Services not seen in log never appear in secondary
+- Alphabetical sorting within each category
+- Top offender selection (highest count, alphabetical tie-breaking across categories)
+- No error entries -> top_offender is None
+- Lowercase error and **ERROR** normalized and counted
+- Duplicate primary service validation
+- HTTP endpoint and FastAPI AnalysisResult model validation
 """
 import io
 import sys
@@ -23,15 +25,20 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import os
+
 # ── Make app/analyzer.py importable ──────────────────────────────────────────
-_APP_DIR = Path(__file__).resolve().parents[3] / "app"
+_analyzer_env = os.environ.get("ANALYZER_DIR", "")
+if _analyzer_env:
+    _APP_DIR = Path(_analyzer_env)
+else:
+    _APP_DIR = Path(__file__).resolve().parents[3] / "app"
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
 # pyrefly: ignore [missing-import]
 from analyzer import (  # noqa: E402
     PRIMARY_SERVICES,
-    SECONDARY_SERVICES,
     analyze_lines,
     parse_line,
 )
@@ -46,19 +53,8 @@ def _log(*lines: str) -> list[str]:
     return list(lines)
 
 
-def _all_services(result: dict) -> set[str]:
-    ebs = result["errors_by_service"]
-    return (
-        set(ebs["primary"])
-        | set(ebs["secondary"])
-        | set(ebs["other_services"])
-    )
-
-
-PRIMARY_0 = PRIMARY_SERVICES[0]    # "payment-service"
-PRIMARY_1 = PRIMARY_SERVICES[1]    # "order-service"
-SECONDARY_0 = SECONDARY_SERVICES[0]  # "billing-service"
-SECONDARY_1 = SECONDARY_SERVICES[1]  # "inventory-service"
+PRIMARY_0 = PRIMARY_SERVICES[0]  # "payment-service"
+PRIMARY_1 = PRIMARY_SERVICES[1]  # "order-service"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,32 +95,40 @@ class TestParseLine:
     def test_blank_line_returns_none(self):
         assert parse_line("") is None
         assert parse_line("   ") is None
+        assert parse_line("\t\n") is None
 
-    def test_too_few_fields_returns_none(self):
-        assert parse_line("2026-09-18 10:23:45 ERROR") is None
+    def test_malformed_date_returns_none(self):
+        assert parse_line("not-a-date 10:23:45 ERROR svc msg") is None
+
+    def test_invalid_calendar_date_returns_none(self):
+        # February 30th does not exist
+        assert parse_line("2026-02-30 10:23:45 ERROR svc msg") is None
+
+    def test_invalid_time_returns_none(self):
+        # Hour 25 does not exist
+        assert parse_line("2026-01-01 25:00:00 ERROR svc msg") is None
 
     def test_invalid_level_returns_none(self):
-        # @@@ is not a valid level
-        assert parse_line("2026-09-18 10:24:25 @@@ ghost-service bogus") is None
+        assert parse_line("2026-01-01 10:00:00 FOOBAR svc msg") is None
+        assert parse_line("2026-01-01 10:00:00 @@@ svc msg") is None
 
-    def test_invalid_date_returns_none(self):
-        assert parse_line("9999-99-99 99:99:99 ERROR svc msg") is None
+    def test_missing_service_returns_none(self):
+        assert parse_line("2026-01-01 10:00:00 ERROR") is None
 
-    def test_traceback_line_returns_none(self):
-        assert parse_line("Traceback most recent call last") is None
-
-    def test_message_with_spaces_captured(self):
-        result = parse_line("2026-09-18 10:23:45 WARN svc this is a multi word message")
+    def test_extra_leading_spaces_handled(self):
+        result = parse_line("  2026-01-01 10:00:00 ERROR svc hello world")
         assert result is not None
-        assert result[4] == "this is a multi word message"
-
-    def test_multiple_spaces_between_fields(self):
-        # Leading whitespace + multiple spaces between fields
-        result = parse_line("  2026-09-18  10:23:45  ERROR  payment-service  msg")
-        assert result is not None
-        _, _, level, service, _ = result
+        _, _, level, service, message = result
         assert level == "ERROR"
-        assert service == "payment-service"
+        assert service == "svc"
+        assert message == "hello world"
+
+
+    def test_valid_non_error_levels(self):
+        for lvl in ["INFO", "WARN", "WARNING", "DEBUG", "CRITICAL", "FATAL"]:
+            res = parse_line(f"2026-01-01 10:00:00 {lvl} svc msg")
+            assert res is not None, f"Level {lvl} should be parsed"
+            assert res[2] == lvl
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -141,25 +145,31 @@ class TestAnalyzeLines:
         assert r["lines_skipped"] == 0
         assert r["top_offender"] is None
         ebs = r["errors_by_service"]
-        assert set(ebs.keys()) == {"primary", "secondary", "other_services"}
+        assert set(ebs.keys()) == {"primary", "secondary"}
 
-    def test_all_three_categories_always_present(self):
+    def test_both_categories_always_present(self):
         r = analyze_lines(_log(
             f"2026-01-01 00:00:00 ERROR {PRIMARY_0} msg",
         ))
         ebs = r["errors_by_service"]
         assert "primary" in ebs
         assert "secondary" in ebs
-        assert "other_services" in ebs
+        assert len(ebs) == 2
 
-    def test_configured_services_always_in_output(self):
-        # Even with an empty log, all PRIMARY and SECONDARY services appear
+    def test_configured_primary_services_always_in_output(self):
+        # Even with an empty log, all PRIMARY services appear with count 0
         r = analyze_lines([])
         ebs = r["errors_by_service"]
         for svc in PRIMARY_SERVICES:
             assert svc in ebs["primary"]
-        for svc in SECONDARY_SERVICES:
-            assert svc in ebs["secondary"]
+            assert ebs["primary"][svc] == 0
+
+    def test_secondary_empty_when_no_unconfigured_services_in_log(self):
+        # If no unconfigured services are in the log, secondary is empty
+        r = analyze_lines(_log(
+            f"2026-01-01 00:00:00 ERROR {PRIMARY_0} msg",
+        ))
+        assert r["errors_by_service"]["secondary"] == {}
 
     # ── Category assignment ───────────────────────────────────────────────
 
@@ -168,42 +178,60 @@ class TestAnalyzeLines:
             f"2026-01-01 00:00:00 ERROR {PRIMARY_0} timeout",
         ))
         assert r["errors_by_service"]["primary"][PRIMARY_0] == 1
+        assert PRIMARY_0 not in r["errors_by_service"]["secondary"]
 
-    def test_secondary_service_error_counted(self):
+    def test_unconfigured_service_automatically_in_secondary(self):
         r = analyze_lines(_log(
-            f"2026-01-01 00:00:00 ERROR {SECONDARY_0} bad state",
+            "2026-01-01 00:00:00 ERROR auth-service bad token",
         ))
-        assert r["errors_by_service"]["secondary"][SECONDARY_0] == 1
+        assert "auth-service" in r["errors_by_service"]["secondary"]
+        assert r["errors_by_service"]["secondary"]["auth-service"] == 1
+        assert "auth-service" not in r["errors_by_service"]["primary"]
 
-    def test_unknown_service_goes_to_other(self):
+    def test_secondary_service_with_non_error_has_zero_count(self):
+        # A service appearing ONLY in INFO/WARN lines must appear in secondary with count 0
         r = analyze_lines(_log(
-            "2026-01-01 00:00:00 ERROR unknown-svc crash",
+            "2026-01-01 00:00:00 INFO billing-service started",
+            "2026-01-01 00:00:05 WARN billing-service latency high",
+            "2026-01-01 00:00:10 DEBUG notification-service ready",
         ))
-        assert "unknown-svc" in r["errors_by_service"]["other_services"]
-        assert r["errors_by_service"]["other_services"]["unknown-svc"] == 1
+        ebs = r["errors_by_service"]
+        assert "billing-service" in ebs["secondary"]
+        assert ebs["secondary"]["billing-service"] == 0
+        assert "notification-service" in ebs["secondary"]
+        assert ebs["secondary"]["notification-service"] == 0
 
-    def test_primary_service_not_in_other(self):
+    def test_unseen_service_never_in_secondary(self):
+        # A service that never appeared in the log must not be in secondary
         r = analyze_lines(_log(
-            f"2026-01-01 00:00:00 ERROR {PRIMARY_0} msg",
+            "2026-01-01 00:00:00 ERROR auth-service msg",
         ))
-        assert PRIMARY_0 not in r["errors_by_service"]["other_services"]
+        assert "some-random-service" not in r["errors_by_service"]["secondary"]
 
-    def test_secondary_service_not_in_other(self):
-        r = analyze_lines(_log(
-            f"2026-01-01 00:00:00 ERROR {SECONDARY_0} msg",
-        ))
-        assert SECONDARY_0 not in r["errors_by_service"]["other_services"]
-
-    def test_no_service_in_multiple_categories(self):
+    def test_no_service_in_both_categories(self):
         lines = [
             f"2026-01-01 00:00:00 ERROR {PRIMARY_0} msg",
-            f"2026-01-01 00:00:00 ERROR {SECONDARY_0} msg",
-            "2026-01-01 00:00:00 ERROR other-svc msg",
+            "2026-01-01 00:00:00 ERROR billing-service msg",
+            "2026-01-01 00:00:00 ERROR auth-service msg",
         ]
         r = analyze_lines(lines)
         ebs = r["errors_by_service"]
-        all_services = list(ebs["primary"]) + list(ebs["secondary"]) + list(ebs["other_services"])
-        assert len(all_services) == len(set(all_services)), "A service appeared in multiple categories"
+        primary_svcs = set(ebs["primary"])
+        secondary_svcs = set(ebs["secondary"])
+        assert primary_svcs.isdisjoint(secondary_svcs)
+
+    def test_alphabetical_sorting_within_categories(self):
+        lines = [
+            "2026-01-01 00:00:00 ERROR zebra-service crash",
+            "2026-01-01 00:00:01 ERROR alpha-service crash",
+            "2026-01-01 00:00:02 ERROR middle-service crash",
+        ]
+        r = analyze_lines(lines)
+        ebs = r["errors_by_service"]
+        # Primary category sorting
+        assert list(ebs["primary"].keys()) == sorted(ebs["primary"].keys())
+        # Secondary category sorting
+        assert list(ebs["secondary"].keys()) == ["alpha-service", "middle-service", "zebra-service"]
 
     # ── Zero counts ───────────────────────────────────────────────────────
 
@@ -214,16 +242,10 @@ class TestAnalyzeLines:
         # PRIMARY_1 not in log at all → must still appear with count 0
         assert r["errors_by_service"]["primary"][PRIMARY_1] == 0
 
-    def test_absent_secondary_service_has_zero_count(self):
-        r = analyze_lines(_log(
-            f"2026-01-01 00:00:00 INFO {SECONDARY_0} all good",
-        ))
-        assert r["errors_by_service"]["secondary"][SECONDARY_1] == 0
-
     def test_no_errors_top_offender_is_none(self):
         r = analyze_lines(_log(
             f"2026-01-01 00:00:00 INFO {PRIMARY_0} ok",
-            f"2026-01-01 00:00:00 WARN {SECONDARY_0} slow",
+            "2026-01-01 00:00:00 WARN billing-service slow",
         ))
         assert r["top_offender"] is None
 
@@ -249,6 +271,12 @@ class TestAnalyzeLines:
         ))
         assert r["errors_by_service"]["primary"][PRIMARY_0] == 1
 
+    def test_asterisk_error_counted(self):
+        r = analyze_lines(_log(
+            "2026-01-01 00:00:00 **ERROR** custom-service boom",
+        ))
+        assert r["errors_by_service"]["secondary"]["custom-service"] == 1
+
     # ── lines_processed / lines_skipped ──────────────────────────────────
 
     def test_blank_lines_not_counted(self):
@@ -268,31 +296,32 @@ class TestAnalyzeLines:
 
     # ── top_offender ──────────────────────────────────────────────────────
 
-    def test_top_offender_highest_count(self):
+    def test_top_offender_highest_count_primary(self):
         lines = [
             f"2026-01-01 00:00:00 ERROR {PRIMARY_0} msg",
             f"2026-01-01 00:00:01 ERROR {PRIMARY_0} msg",
-            f"2026-01-01 00:00:02 ERROR {SECONDARY_0} msg",
+            "2026-01-01 00:00:02 ERROR auth-service msg",
         ]
         r = analyze_lines(lines)
         assert r["top_offender"] == PRIMARY_0
 
-    def test_top_offender_from_other_services(self):
+    def test_top_offender_highest_count_secondary(self):
         lines = [
-            "2026-01-01 00:00:00 ERROR unknown-svc msg",
-            "2026-01-01 00:00:01 ERROR unknown-svc msg",
+            "2026-01-01 00:00:00 ERROR billing-service msg",
+            "2026-01-01 00:00:01 ERROR billing-service msg",
             f"2026-01-01 00:00:02 ERROR {PRIMARY_0} msg",
         ]
         r = analyze_lines(lines)
-        assert r["top_offender"] == "unknown-svc"
+        assert r["top_offender"] == "billing-service"
 
     def test_top_offender_tie_broken_alphabetically(self):
-        # "aaa-service" and "zzz-service" both have 2 errors → "aaa-service" wins
+        # "aaa-service" (secondary) and "payment-service" (primary) both have 2 errors
+        # 'aaa-service' comes before 'payment-service' alphabetically -> aaa-service wins
         lines = [
             "2026-01-01 00:00:00 ERROR aaa-service msg",
             "2026-01-01 00:00:01 ERROR aaa-service msg",
-            "2026-01-01 00:00:02 ERROR zzz-service msg",
-            "2026-01-01 00:00:03 ERROR zzz-service msg",
+            f"2026-01-01 00:00:02 ERROR {PRIMARY_0} msg",
+            f"2026-01-01 00:00:03 ERROR {PRIMARY_0} msg",
         ]
         r = analyze_lines(lines)
         assert r["top_offender"] == "aaa-service"
@@ -311,6 +340,7 @@ class TestAnalyzeLines:
     def test_zero_error_service_not_top_offender(self):
         r = analyze_lines(_log(
             f"2026-01-01 00:00:00 INFO {PRIMARY_0} ok",
+            "2026-01-01 00:00:00 INFO billing-service ok",
         ))
         assert r["top_offender"] is None
 
@@ -335,41 +365,44 @@ class TestAnalyzeLines:
         assert r["lines_processed"] == 8
         assert r["lines_skipped"] == 2   # @@@ line + Traceback line
         ebs = r["errors_by_service"]
+        # Primary services
         assert ebs["primary"]["payment-service"] == 2
+        assert ebs["primary"]["order-service"] == 0
+        # Secondary services (all non-primary services in log)
+        assert ebs["secondary"]["auth-service"] == 0
         assert ebs["secondary"]["billing-service"] == 2
-        assert ebs["other_services"]["notification-service"] == 1
-        # billing-service and payment-service both have 2 errors.
-        # Tie-break: case-insensitive alphabetical → 'b' < 'p' → billing-service wins.
+        assert ebs["secondary"]["notification-service"] == 1
+        assert ebs["secondary"]["search-service"] == 0
+        # billing-service (2) and payment-service (2) tie: 'b' < 'p'
         assert r["top_offender"] == "billing-service"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Configuration overlap tests
+# Configuration validation tests
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestConfigOverlap:
-    def test_overlap_raises_at_module_level(self):
-        """Importing analyzer with overlapping lists must raise ValueError."""
-        import types, importlib
-        fake_module = types.ModuleType("_test_overlap_analyzer")
+class TestConfigValidation:
+    def test_duplicate_primary_raises_value_error(self):
+        """Duplicate entry in PRIMARY_SERVICES must raise ValueError."""
+        import types
+        fake_module = types.ModuleType("_test_duplicate_analyzer")
         fake_module.__spec__ = None
-        with pytest.raises(ValueError, match="overlap"):
+        with pytest.raises(ValueError, match="Duplicate service in PRIMARY_SERVICES"):
             exec(
                 """
-PRIMARY_SERVICES = ["svc-a"]
-SECONDARY_SERVICES = ["svc-a"]
-if set(PRIMARY_SERVICES) & set(SECONDARY_SERVICES):
-    raise ValueError("Primary and secondary services must not overlap")
+PRIMARY_SERVICES = ["svc-a", "svc-a"]
+if len(PRIMARY_SERVICES) != len(set(PRIMARY_SERVICES)):
+    raise ValueError("Duplicate service in PRIMARY_SERVICES")
 """,
                 fake_module.__dict__,
             )
 
-    def test_no_overlap_in_actual_config(self):
-        assert set(PRIMARY_SERVICES).isdisjoint(set(SECONDARY_SERVICES))
+    def test_current_primary_has_no_duplicates(self):
+        assert len(PRIMARY_SERVICES) == len(set(PRIMARY_SERVICES))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HTTP endpoint tests (via TestClient)
+# HTTP endpoint tests (via TestClient) & Model validation
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -379,7 +412,7 @@ def client_fixture():
 
 
 class TestHTTPEndpoint:
-    VALID_LOG = b"2026-09-18 10:23:45 ERROR payment-service Connection timeout\n"
+    VALID_LOG = b"2026-09-18 10:23:45 ERROR payment-service Connection timeout\n2026-09-18 10:23:46 INFO custom-service msg\n"
 
     def test_valid_upload_returns_200(self, client_fixture):
         resp = client_fixture.post(
@@ -388,7 +421,7 @@ class TestHTTPEndpoint:
         )
         assert resp.status_code == 200
 
-    def test_response_has_required_structure(self, client_fixture):
+    def test_response_has_two_categories_only(self, client_fixture):
         resp = client_fixture.post(
             "/analyze",
             files={"file": ("test.log", io.BytesIO(self.VALID_LOG), "text/plain")},
@@ -398,17 +431,19 @@ class TestHTTPEndpoint:
         assert "lines_skipped" in data
         assert "top_offender" in data
         ebs = data["errors_by_service"]
-        assert "primary" in ebs
-        assert "secondary" in ebs
-        assert "other_services" in ebs
+        assert set(ebs.keys()) == {"primary", "secondary"}
 
-    def test_primary_service_error_in_response(self, client_fixture):
+    def test_pydantic_model_validates_response(self, client_fixture):
+        from openapi_server.models.analysis_result import AnalysisResult
         resp = client_fixture.post(
             "/analyze",
             files={"file": ("test.log", io.BytesIO(self.VALID_LOG), "text/plain")},
         )
         data = resp.json()
-        assert data["errors_by_service"]["primary"]["payment-service"] == 1
+        model_instance = AnalysisResult.model_validate(data)
+        assert model_instance.lines_processed == 2
+        assert model_instance.errors_by_service.primary["payment-service"] == 1
+        assert model_instance.errors_by_service.secondary["custom-service"] == 0
 
     def test_missing_file_field_returns_422(self, client_fixture):
         resp = client_fixture.post(
@@ -434,3 +469,4 @@ class TestHTTPEndpoint:
         data = resp.json()
         assert data["top_offender"] is None
         assert data["lines_processed"] == 0
+        assert data["errors_by_service"]["secondary"] == {}

@@ -15,7 +15,7 @@ class BaseAnalyzeApi:
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         BaseAnalyzeApi.subclasses = BaseAnalyzeApi.subclasses + (cls,)
-    async def analyze(
+    def analyze(
         self,
         file: UploadFile,
     ) -> AnalysisResult:
